@@ -19,7 +19,7 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	const int s = socket(PF_INET, SOCK_STREAM, IPPROTO_IP);
 	size_t packet_size;
 	uint8_t *packet;
-	char buf[256];
+	char buf[INET_ADDRSTRLEN];
 	
 	strncpy(ifr.ifr_name, interface, IFNAMSIZ);
 
@@ -106,10 +106,10 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 
 	/* display sender ip address */
 	iaddr.s_addr = arp_header.ar_targetIP;
-	inet_ntop(AF_INET, &iaddr, buf, sizeof(buf));
+	inet_ntop(AF_INET, &iaddr, buf, INET_ADDRSTRLEN);
 	printf("dest : %s\n",buf);
 	iaddr.s_addr = arp_header.ar_senderIP;
-	inet_ntop(AF_INET, &iaddr, buf, sizeof(buf));
+	inet_ntop(AF_INET, &iaddr, buf, INET_ADDRSTRLEN);
 	printf("src  : %s\n", buf);
 	puts("=========================");	
 	return 0;
