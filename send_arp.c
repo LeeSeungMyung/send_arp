@@ -24,7 +24,7 @@ struct send_arp_addr {
 	uint32_t targetIP;
 } __attribute__((packed)); //disabled padding;
 
-int send_arp(const char* interface,const uint16_t operation, const char* target_ip, pcap_t *handle){
+int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, const char* sender_ip, const uint16_t operation, pcap_t *handle){
 	struct ifreq ifr;
 	struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
 	struct libnet_ethernet_hdr ether_header;
@@ -50,13 +50,17 @@ int send_arp(const char* interface,const uint16_t operation, const char* target_
 	}
 	
     for (i = 0; i < 6; ++i)
-		printf("%02x:", (unsigned char)ifr.ifr_addr.sa_data[i]);
+		printf("%02x ", (unsigned char)ifr.ifr_addr.sa_data[i]);
 	puts("");
 
 	packet_size = ether_header_size + arp_header_size + arp_addr_size;
 	packet = (uint8_t*)calloc(1, packet_size);
 
-	memset(ether_header.ether_dhost, 0xff, ETHER_ADDR_LEN);
+	if(target_mac != NULL)
+		memmove(ether_header.ether_dhost, target_mac, ETHER_ADDR_LEN);
+	else
+		memset(ether_header.ether_dhost, 0xff, ETHER_ADDR_LEN);
+
 	memmove(ether_header.ether_shost, ifr.ifr_addr.sa_data, ETHER_ADDR_LEN);
 	ether_header.ether_type = htons(ETHERTYPE_ARP);
 
@@ -70,11 +74,17 @@ int send_arp(const char* interface,const uint16_t operation, const char* target_
 
 	if(ioctl(s, SIOCGIFADDR, &ifr) != 0){
 		perror("ioctl() SIOCGIFADDR error");
-		exit(1);
+		return -1;
 	}
 
+	if(sender_ip != NULL)
+		inet_aton(sender_ip, &sin->sin_addr);
+
 	arp_addr.senderIP = sin->sin_addr.s_addr;
-	memset(arp_addr.targetHA, 0x00, ETHER_ADDR_LEN);
+	if(target_mac != NULL)
+		memmove(arp_addr.targetHA, target_mac, ETHER_ADDR_LEN);
+	else
+		memset(arp_addr.targetHA, 0x00, ETHER_ADDR_LEN);
 	inet_aton(target_ip, (struct in_addr*)(&arp_addr.targetIP));
 	
 	memmove(packet, &ether_header, ether_header_size);
@@ -82,11 +92,6 @@ int send_arp(const char* interface,const uint16_t operation, const char* target_
 	memmove(packet+ether_header_size+arp_header_size, &arp_addr, arp_addr_size);
 
 	pcap_sendpacket(handle, packet, packet_size);
-	for(i = 0; i < packet_size; i++){
-		printf("%02x ", packet[i]);
-		if( i==10)	puts("");
-	}
-	puts("");
 
 	ip = inet_ntoa(sin->sin_addr);
 	printf("%s\n", ip);
@@ -101,20 +106,30 @@ int main (int argc, char *argv[])
     char *dev;          /* The device to sniff on */
     char errbuf[PCAP_ERRBUF_SIZE];  /* Error string */
     struct bpf_program fp;      /* The compiled filter */
-    char filter_exp[] = "port 80";  /* The filter expression */
+    char filter_exp[] = "arp";  /* The filter expression */
     bpf_u_int32 mask;       /* Our netmask */
     bpf_u_int32 net;        /* Our IP */
     struct pcap_pkthdr *header; /* The header that pcap gives us */
     const uint8_t *packet;      /* The actual packet */
-    int i;
+	struct libnet_ethernet_hdr* ether_header;
+	struct libnet_arp_hdr* arp_header;
+	struct send_arp_addr* arp_addr;
+	size_t ether_header_size = sizeof(struct libnet_ethernet_hdr);
+	size_t arp_header_size = sizeof(struct libnet_arp_hdr);
+    int status;
     int s = socket (PF_INET, SOCK_STREAM, 0);
-	
+	char* target_ip;
+	char* sender_ip;
+	struct in_addr iaddr;
+
 	if(argc != 4){
 		puts("argc != 4");
 		return 1;
 	}
 
     dev = argv[1]; //get interface
+	sender_ip = argv[2];
+	target_ip = argv[3];
 
     if (dev == NULL) {
         fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
@@ -144,11 +159,43 @@ int main (int argc, char *argv[])
 
 
 	
-	send_arp(argv[1], ARPOP_REQUEST, argv[3], handle);
 
+
+	send_arp(dev, target_ip, NULL, NULL, ARPOP_REQUEST, handle);
+
+    while(1){
+
+
+        /* Grab a packet*/
+        status = pcap_next_ex(handle, &header, &packet);
+
+        /*No packet*/
+        if(!status)
+            continue;
+		printf("%p\n", packet);
+        ether_header = (struct libnet_ethernet_hdr*)packet;
+        /*is ARP?*/
+		printf("%p\n",ether_header);
+        if(ntohs(ether_header->ether_type) == ETHERTYPE_ARP){
+			arp_header = (struct libnet_arp_hdr*)((uint8_t*)ether_header+ether_header_size);
+			printf("%p\n", arp_header);
+			if(arp_header->ar_pln == IPV4_ADDR_LEN && arp_header->ar_hln == ETHER_ADDR_LEN){
+				if(ntohs(arp_header->ar_op) == ARPOP_REPLY){
+					arp_addr = (struct send_arp_addr*)((uint8_t*)arp_header+arp_header_size);
+					inet_aton(target_ip, &iaddr);
+					printf("0x%2x == 0x%2x\n", iaddr.s_addr, arp_addr->senderIP);
+					if(iaddr.s_addr == arp_addr->senderIP){
+						send_arp(dev, target_ip, arp_addr->senderHA, sender_ip, ARPOP_REPLY, handle);
+						puts("complete!");
+						break;
+
+					}
+				}
+			}
+        }
+    }
 	
 
     close (s);
     return 0;
 }
-
