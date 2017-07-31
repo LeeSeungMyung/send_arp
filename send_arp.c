@@ -33,6 +33,10 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	packet_size = ether_header_size + arp_header_size;
 	packet = (uint8_t*)calloc(1, packet_size);
 
+	if(packet == NULL){
+		puts("memory allocate failed..");
+		return -1;
+	}
 
 	/* set ethernet frame */
 	if(target_mac != NULL)
@@ -111,7 +115,10 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	iaddr.s_addr = arp_header.ar_senderIP;
 	inet_ntop(AF_INET, &iaddr, buf, INET_ADDRSTRLEN);
 	printf("src  : %s\n", buf);
-	puts("=========================");	
+	puts("=========================");
+	
+	free(packet);
+	packet = NULL;
 	return 0;
 }
 
