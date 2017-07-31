@@ -41,7 +41,11 @@ struct libnet_arp_hdr
 #define ARPOP_INVREQUEST 8  /* req to identify peer */
 #define ARPOP_INVREPLY   9  /* resp identifying peer */
     /* address information allocated dynamically */
-};
+    u_int8_t  ar_senderHA[ETHER_ADDR_LEN];
+    u_int32_t ar_senderIP;
+    u_int8_t  ar_targetHA[ETHER_ADDR_LEN];
+    u_int32_t ar_targetIP; 
+} __attribute__((packed)); //disabled padding
 
 
 /*
