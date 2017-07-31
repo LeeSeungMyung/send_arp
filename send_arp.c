@@ -1,61 +1,40 @@
-#include <sys/ioctl.h>
-#include <net/if.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/ether.h>
-#include <netinet/if_ether.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <pcap.h>
+#include "header.h"
 
-#include "libnet-headers.h"
+void display_mac_address(uint8_t* address){
+	int i;
 
+	for(i = 0; i < ETHER_ADDR_LEN; i++)
+		printf("%02X%c",address[i], (i<ETHER_ADDR_LEN-1) ? ':' : ' ');
+	puts("");
 
-#define IPV4_ADDR_LEN 4
-#define PCAP_OPENFLAG_PROMISCUOUS 1
-
-struct send_arp_addr {
-	uint8_t  senderHA[ETHER_ADDR_LEN];
-	uint32_t senderIP;
-	uint8_t  targetHA[ETHER_ADDR_LEN];
-	uint32_t targetIP;
-} __attribute__((packed)); //disabled padding;
-
+}
 int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, const char* sender_ip, const uint16_t operation, pcap_t *handle){
 	struct ifreq ifr;
 	struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
 	struct libnet_ethernet_hdr ether_header;
 	struct libnet_arp_hdr arp_header;
-	struct send_arp_addr arp_addr;
-
+	struct in_addr iaddr;
 	const size_t ether_header_size = sizeof(struct libnet_ethernet_hdr);
 	const size_t arp_header_size = sizeof(struct libnet_arp_hdr);
-	const size_t arp_addr_size = sizeof(struct send_arp_addr);
 	const int s = socket(PF_INET, SOCK_STREAM, IPPROTO_IP);
-	
 	size_t packet_size;
-
-	size_t i;
-	char *ip;
 	uint8_t *packet;
-
-	strncpy(ifr.ifr_name, interface, IFNAMSIZ);
+	char buf[256];
 	
+	strncpy(ifr.ifr_name, interface, IFNAMSIZ);
+
+	/* get mac address */
 	if(ioctl(s, SIOCGIFHWADDR, &ifr) != 0){
 		perror( "ioctl() SIOCGIFHWADDR error"); 
 		exit(1);
 	}
 	
-    for (i = 0; i < 6; ++i)
-		printf("%02x ", (unsigned char)ifr.ifr_addr.sa_data[i]);
-	puts("");
-
-	packet_size = ether_header_size + arp_header_size + arp_addr_size;
+	/* packet memory allocate  */
+	packet_size = ether_header_size + arp_header_size;
 	packet = (uint8_t*)calloc(1, packet_size);
 
+
+	/* set ethernet frame */
 	if(target_mac != NULL)
 		memmove(ether_header.ether_dhost, target_mac, ETHER_ADDR_LEN);
 	else
@@ -64,42 +43,78 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	memmove(ether_header.ether_shost, ifr.ifr_addr.sa_data, ETHER_ADDR_LEN);
 	ether_header.ether_type = htons(ETHERTYPE_ARP);
 
-	arp_header.ar_hrd = htons(ARPHRD_ETHER);
-	arp_header.ar_pro = htons(ETHERTYPE_IP);
-	arp_header.ar_hln = ETHER_ADDR_LEN;
-	arp_header.ar_pln = IPV4_ADDR_LEN;
-	arp_header.ar_op  = htons(operation);
 
-	memmove(arp_addr.senderHA, ifr.ifr_addr.sa_data, ETHER_ADDR_LEN);
+	/* set arp packet*/
+	arp_header.ar_hrd = htons(ARPHRD_ETHER); /* hardware format */
+	arp_header.ar_pro = htons(ETHERTYPE_IP); /* procotol format */
+	arp_header.ar_hln = ETHER_ADDR_LEN; /* hardware length */
+	arp_header.ar_pln = IPV4_ADDR_LEN; /* ip addr length */
+	arp_header.ar_op  = htons(operation); /* operation type */
+	memmove(arp_header.ar_senderHA, ifr.ifr_addr.sa_data, ETHER_ADDR_LEN); /* sender hardware address*/
 
+	/* get ip address */
 	if(ioctl(s, SIOCGIFADDR, &ifr) != 0){
 		perror("ioctl() SIOCGIFADDR error");
 		return -1;
 	}
 
-	if(sender_ip != NULL)
-		inet_aton(sender_ip, &sin->sin_addr);
+	/* sender ip */
+	if(sender_ip == NULL)
+		iaddr.s_addr = sin->sin_addr.s_addr;
+	else {
+		if(inet_pton(AF_INET, sender_ip, &iaddr) == 0){
+			puts("sender_ip inet_pton() convert failed..");
+			return -1;
+		}
+	}
+	arp_header.ar_senderIP = iaddr.s_addr;
 
-	arp_addr.senderIP = sin->sin_addr.s_addr;
-	if(target_mac != NULL)
-		memmove(arp_addr.targetHA, target_mac, ETHER_ADDR_LEN);
+
+	/* target hardware address */
+	if(target_mac != NULL) 
+		memmove(arp_header.ar_targetHA, target_mac, ETHER_ADDR_LEN);
 	else
-		memset(arp_addr.targetHA, 0x00, ETHER_ADDR_LEN);
-	inet_aton(target_ip, (struct in_addr*)(&arp_addr.targetIP));
-	
+		memset(arp_header.ar_targetHA, 0x00, ETHER_ADDR_LEN); 
+
+
+	/* target ip */
+	if(inet_pton(AF_INET, target_ip, &iaddr) == 0){
+		puts("target_ip inet_pton() convert failed..");
+		return -1;
+	}
+	arp_header.ar_targetIP = iaddr.s_addr;
+
+	/* memory copy, header to packet*/
 	memmove(packet, &ether_header, ether_header_size);
 	memmove(packet+ether_header_size, &arp_header, arp_header_size);
-	memmove(packet+ether_header_size+arp_header_size, &arp_addr, arp_addr_size);
 
+	/* send packet */
 	pcap_sendpacket(handle, packet, packet_size);
 
-	ip = inet_ntoa(sin->sin_addr);
-	printf("%s\n", ip);
+	puts("=========================");
+	puts("[Ethernet]");
+	printf("dest : ");
+	display_mac_address(ether_header.ether_dhost);
+	printf("src  : ");
+	display_mac_address(ether_header.ether_shost);
 
+	puts("[ARP]");
+	printf("dest : ");
+	display_mac_address(arp_header.ar_targetHA);
+	printf("src  : ");
+	display_mac_address(arp_header.ar_senderHA);
 
+	/* display sender ip address */
+	iaddr.s_addr = arp_header.ar_targetIP;
+	inet_ntop(AF_INET, &iaddr, buf, sizeof(buf));
+	printf("dest : %s\n",buf);
+	iaddr.s_addr = arp_header.ar_senderIP;
+	inet_ntop(AF_INET, &iaddr, buf, sizeof(buf));
+	printf("src  : %s\n", buf);
+	puts("=========================");	
 	return 0;
-
 }
+
 int main (int argc, char *argv[])
 {
     pcap_t *handle;         /* Session handle */
@@ -113,11 +128,10 @@ int main (int argc, char *argv[])
     const uint8_t *packet;      /* The actual packet */
 	struct libnet_ethernet_hdr* ether_header;
 	struct libnet_arp_hdr* arp_header;
-	struct send_arp_addr* arp_addr;
-	size_t ether_header_size = sizeof(struct libnet_ethernet_hdr);
-	size_t arp_header_size = sizeof(struct libnet_arp_hdr);
-    int status;
-    int s = socket (PF_INET, SOCK_STREAM, 0);
+	const size_t ether_header_size = sizeof(struct libnet_ethernet_hdr);
+	//size_t arp_header_size = sizeof(struct libnet_arp_hdr);
+    const int s = socket (PF_INET, SOCK_STREAM, 0);
+	int status;
 	char* target_ip;
 	char* sender_ip;
 	struct in_addr iaddr;
@@ -166,27 +180,29 @@ int main (int argc, char *argv[])
     while(1){
 
 
-        /* Grab a packet*/
+        /* Grab a packet */
         status = pcap_next_ex(handle, &header, &packet);
 
-        /*No packet*/
+        /* No packet */
         if(!status)
             continue;
-		printf("%p\n", packet);
-        ether_header = (struct libnet_ethernet_hdr*)packet;
-        /*is ARP?*/
-		printf("%p\n",ether_header);
+        
+		ether_header = (struct libnet_ethernet_hdr*)packet;
+        
+		/*is ARP? */
         if(ntohs(ether_header->ether_type) == ETHERTYPE_ARP){
 			arp_header = (struct libnet_arp_hdr*)((uint8_t*)ether_header+ether_header_size);
-			printf("%p\n", arp_header);
+			/* MAC length == 6 && ip length == 4 */
 			if(arp_header->ar_pln == IPV4_ADDR_LEN && arp_header->ar_hln == ETHER_ADDR_LEN){
+				/* operation == arp reply */
 				if(ntohs(arp_header->ar_op) == ARPOP_REPLY){
-					arp_addr = (struct send_arp_addr*)((uint8_t*)arp_header+arp_header_size);
 					inet_aton(target_ip, &iaddr);
-					printf("0x%2x == 0x%2x\n", iaddr.s_addr, arp_addr->senderIP);
-					if(iaddr.s_addr == arp_addr->senderIP){
-						send_arp(dev, target_ip, arp_addr->senderHA, sender_ip, ARPOP_REPLY, handle);
-						puts("complete!");
+
+					/* request target ip == reply sender ip */
+					if(iaddr.s_addr == arp_header->ar_senderIP){
+						status = send_arp(dev, target_ip, arp_header->ar_senderHA, sender_ip, ARPOP_REPLY, handle);
+
+						puts( (status==-1) ? "failed.." : "complete!" ); 
 						break;
 
 					}
