@@ -95,6 +95,7 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	/* send packet */
 	pcap_sendpacket(handle, packet, packet_size);
 
+	/* display */
 	puts("=========================");
 	puts("[Ethernet]");
 	printf("dest : ");
@@ -108,7 +109,6 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	printf("src  : ");
 	display_mac_address(arp_header.ar_senderHA);
 
-	/* display sender ip address */
 	iaddr.s_addr = arp_header.ar_targetIP;
 	inet_ntop(AF_INET, &iaddr, buf, INET_ADDRSTRLEN);
 	printf("dest : %s\n",buf);
@@ -117,8 +117,10 @@ int send_arp(const char* interface, const char* target_ip, uint8_t* target_mac, 
 	printf("src  : %s\n", buf);
 	puts("=========================");
 	
+	/* memory free*/
 	free(packet);
 	packet = NULL;
+
 	return 0;
 }
 
